@@ -94,6 +94,8 @@ export async function run() {
   } catch (error) {
     core.setFailed((error as Error).message);
   }
+
+  process.exit(0);
 }
 
 export async function addBinToPath(): Promise<boolean> {
