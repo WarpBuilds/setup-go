@@ -1,16 +1,16 @@
 ---
 name: http-proxy-agent
-version: 5.0.0
+version: 7.0.2
 type: npm
 summary: An HTTP(s) proxy `http.Agent` implementation for HTTP
 homepage:
 license: mit
 licenses:
-- sources: README.md
-  text: |-
+- sources: LICENSE
+  text: |
     (The MIT License)
 
-    Copyright (c) 2013 Nathan Rajlich &lt;nathan@tootallnate.net&gt;
+    Copyright (c) 2013 Nathan Rajlich <nathan@tootallnate.net>
 
     Permission is hereby granted, free of charge, to any person obtaining
     a copy of this software and associated documentation files (the
