@@ -1,6 +1,6 @@
 ---
 name: jws
-version: 4.0.0
+version: 4.0.1
 type: npm
 summary: Implementation of JSON Web Signatures
 homepage:

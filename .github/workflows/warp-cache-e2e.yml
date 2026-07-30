@@ -1,0 +1,100 @@
+name: warp-cache-e2e
+
+on:
+  pull_request:
+    paths-ignore:
+      - '**.md'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+jobs:
+  save:
+    name: save (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          [
+            warp-ubuntu-latest-x64-2x,
+            warp-windows-2022-x64-4x,
+            warp-macos-14-arm64-6x
+          ]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The cache key is derived from this file's hash, so a per-run value
+      # guarantees a fresh key and a genuine miss -> save -> hit round trip.
+      - name: Write run-unique go.mod
+        shell: bash
+        run: |
+          mkdir -p warp-fixture
+          printf 'module warp-cache-e2e-%s-%s\n\ngo 1.21\n' \
+            "${{ github.run_id }}" "${{ github.run_attempt }}" \
+            > warp-fixture/go.mod
+
+      - name: Setup Go
+        id: setup
+        uses: ./
+        with:
+          go-version: '1.24'
+          cache-dependency-path: warp-fixture/go.mod
+
+      - name: Assert cache miss on a fresh key
+        shell: bash
+        run: |
+          if [ "${{ steps.setup.outputs.cache-hit }}" != "false" ]; then
+            echo "expected a miss on a run-unique key, got cache-hit=${{ steps.setup.outputs.cache-hit }}"
+            exit 1
+          fi
+
+      # Give the post step real bytes to upload.
+      - name: Populate the go build cache
+        shell: bash
+        working-directory: warp-fixture
+        run: |
+          printf 'package main\n\nfunc main() {}\n' > main.go
+          go build ./...
+
+  restore:
+    name: restore (${{ matrix.os }})
+    needs: save
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          [
+            warp-ubuntu-latest-x64-2x,
+            warp-windows-2022-x64-4x,
+            warp-macos-14-arm64-6x
+          ]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Write the same run-unique go.mod
+        shell: bash
+        run: |
+          mkdir -p warp-fixture
+          printf 'module warp-cache-e2e-%s-%s\n\ngo 1.21\n' \
+            "${{ github.run_id }}" "${{ github.run_attempt }}" \
+            > warp-fixture/go.mod
+
+      - name: Setup Go
+        id: setup
+        uses: ./
+        with:
+          go-version: '1.24'
+          cache-dependency-path: warp-fixture/go.mod
+
+      - name: Assert the cache saved by the save job was restored
+        shell: bash
+        run: |
+          if [ "${{ steps.setup.outputs.cache-hit }}" != "true" ]; then
+            echo "expected an exact-key hit on the cache saved by the save job"
+            exit 1
+          fi

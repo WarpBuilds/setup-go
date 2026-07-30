@@ -1,9 +1,9 @@
 ---
 name: "@google-cloud/storage"
-version: 7.11.1
+version: 7.21.0
 type: npm
 summary: Cloud Storage Client Library for Node.js
-homepage:
+homepage: https://github.com/googleapis/google-cloud-node/tree/main/handwritten/storage
 license: apache-2.0
 licenses:
 - sources: LICENSE
@@ -216,11 +216,11 @@ licenses:
 
     See [LICENSE](https://github.com/googleapis/nodejs-storage/blob/main/LICENSE)
 
-    [client-docs]: https://googleapis.dev/nodejs/storage/latest
+    [client-docs]: https://cloud.google.com/nodejs/docs/reference/storage/latest
     [product-docs]: https://cloud.google.com/storage
     [shell_img]: https://gstatic.com/cloudssh/images/open-btn.png
     [projects]: https://console.cloud.google.com/project
     [billing]: https://support.google.com/cloud/answer/6293499#enable-billing
     [enable_api]: https://console.cloud.google.com/flows/enableapi?apiid=storage-api.googleapis.com
-    [auth]: https://cloud.google.com/docs/authentication/getting-started
+    [auth]: https://cloud.google.com/docs/authentication/external/set-up-adc-local
 notices: []

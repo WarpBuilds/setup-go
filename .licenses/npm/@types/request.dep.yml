@@ -1,6 +1,6 @@
 ---
 name: "@types/request"
-version: 2.48.12
+version: 2.48.13
 type: npm
 summary: TypeScript definitions for request
 homepage: https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/request
