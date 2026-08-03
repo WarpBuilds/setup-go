@@ -11,6 +11,9 @@ on:
       - '**.md'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   save:
     name: save (${{ matrix.os }})
@@ -26,16 +29,20 @@ jobs:
           ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The cache key is derived from this file's hash, so a per-run value
       # guarantees a fresh key and a genuine miss -> save -> hit round trip.
       - name: Write run-unique go.mod
         shell: bash
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           mkdir -p warp-fixture
           printf 'module warp-cache-e2e-%s-%s\n\ngo 1.21\n' \
-            "${{ github.run_id }}" "${{ github.run_attempt }}" \
-            > warp-fixture/go.mod
+            "$RUN_ID" "$RUN_ATTEMPT" > warp-fixture/go.mod
 
       - name: Setup Go
         id: setup
@@ -46,9 +53,11 @@ jobs:
 
       - name: Assert cache miss on a fresh key
         shell: bash
+        env:
+          CACHE_HIT: ${{ steps.setup.outputs.cache-hit }}
         run: |
-          if [ "${{ steps.setup.outputs.cache-hit }}" != "false" ]; then
-            echo "expected a miss on a run-unique key, got cache-hit=${{ steps.setup.outputs.cache-hit }}"
+          if [ "$CACHE_HIT" != "false" ]; then
+            echo "expected a miss on a run-unique key, got cache-hit=$CACHE_HIT"
             exit 1
           fi
 
@@ -75,14 +84,18 @@ jobs:
           ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Write the same run-unique go.mod
         shell: bash
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           mkdir -p warp-fixture
           printf 'module warp-cache-e2e-%s-%s\n\ngo 1.21\n' \
-            "${{ github.run_id }}" "${{ github.run_attempt }}" \
-            > warp-fixture/go.mod
+            "$RUN_ID" "$RUN_ATTEMPT" > warp-fixture/go.mod
 
       - name: Setup Go
         id: setup
@@ -93,8 +106,10 @@ jobs:
 
       - name: Assert the cache saved by the save job was restored
         shell: bash
+        env:
+          CACHE_HIT: ${{ steps.setup.outputs.cache-hit }}
         run: |
-          if [ "${{ steps.setup.outputs.cache-hit }}" != "true" ]; then
+          if [ "$CACHE_HIT" != "true" ]; then
             echo "expected an exact-key hit on the cache saved by the save job"
             exit 1
           fi
