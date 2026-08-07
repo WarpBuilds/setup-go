@@ -1,17 +1,98 @@
-import * as core from '@actions/core';
-import * as io from '@actions/io';
-import * as tc from '@actions/tool-cache';
+import {
+  jest,
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  afterAll
+} from '@jest/globals';
 import fs from 'fs';
 import cp from 'child_process';
-import osm, {type} from 'os';
-import path from 'path';
-import * as main from '../src/main';
-import * as im from '../src/installer';
-import * as httpm from '@actions/http-client';
 
-import goJsonData from './data/golang-dl.json';
-import matchers from '../matchers.json';
-import goTestManifest from './data/versions-manifest.json';
+import goJsonData from './data/golang-dl.json' with {type: 'json'};
+import matchers from '../matchers.json' with {type: 'json'};
+import goTestManifest from './data/versions-manifest.json' with {type: 'json'};
+
+import type {IGoVersion} from '../src/installer.js';
+import type {IToolRelease} from '@actions/tool-cache';
+
+const httpClientGetJson = jest.fn();
+
+const realCore = await import('@actions/core');
+
+jest.unstable_mockModule('@actions/core', () => ({
+  ...realCore,
+  getInput: jest.fn(),
+  getBooleanInput: jest.fn(),
+  info: jest.fn(),
+  debug: jest.fn(),
+  exportVariable: jest.fn()
+}));
+
+const realOs = (await import('os')).default;
+const osPlatformMock = jest.fn();
+const osArchMock = jest.fn();
+const osExports = {
+  ...realOs,
+  platform: osPlatformMock,
+  arch: osArchMock
+};
+jest.unstable_mockModule('os', () => ({...osExports, default: osExports}));
+
+const realPath = (await import('path')).default;
+const pathJoinMock = jest.fn();
+const pathExports = {
+  ...realPath,
+  join: pathJoinMock
+};
+jest.unstable_mockModule('path', () => ({
+  ...pathExports,
+  default: pathExports
+}));
+
+jest.unstable_mockModule('@actions/io', () => ({
+  which: jest.fn(),
+  mkdirP: jest.fn(),
+  rmRF: jest.fn(),
+  mv: jest.fn(),
+  cp: jest.fn()
+}));
+
+const realTc = await import('@actions/tool-cache');
+
+jest.unstable_mockModule('@actions/tool-cache', () => ({
+  ...realTc,
+  find: jest.fn(),
+  downloadTool: jest.fn(),
+  extractTar: jest.fn(),
+  extractZip: jest.fn(),
+  cacheDir: jest.fn(),
+  getManifestFromRepo: jest.fn()
+}));
+
+const realHttp = await import('@actions/http-client');
+
+jest.unstable_mockModule('@actions/http-client', () => ({
+  ...realHttp,
+  HttpClient: jest.fn().mockImplementation(() => ({
+    getJson: httpClientGetJson
+  }))
+}));
+
+jest.unstable_mockModule('../src/go-version-fetch.js', () => ({
+  getVersionsDist: jest.fn()
+}));
+
+const core = await import('@actions/core');
+const io = await import('@actions/io');
+const tc = await import('@actions/tool-cache');
+const vf = await import('../src/go-version-fetch.js');
+const main = await import('../src/main.js');
+const im = await import('../src/installer.js');
+const osm = (await import('os')).default;
+const path = (await import('path')).default;
 const matcherPattern = matchers.problemMatcher[0].pattern[0];
 const matcherRegExp = new RegExp(matcherPattern.regexp);
 const win32Join = path.win32.join;
@@ -23,31 +104,31 @@ describe('setup-go', () => {
   let inputs = {} as any;
   let os = {} as any;
 
-  let inSpy: jest.SpyInstance;
-  let getBooleanInputSpy: jest.SpyInstance;
-  let exportVarSpy: jest.SpyInstance;
-  let findSpy: jest.SpyInstance;
-  let cnSpy: jest.SpyInstance;
-  let logSpy: jest.SpyInstance;
-  let getSpy: jest.SpyInstance;
-  let platSpy: jest.SpyInstance;
-  let archSpy: jest.SpyInstance;
-  let joinSpy: jest.SpyInstance;
-  let dlSpy: jest.SpyInstance;
-  let extractTarSpy: jest.SpyInstance;
-  let extractZipSpy: jest.SpyInstance;
-  let cacheSpy: jest.SpyInstance;
-  let dbgSpy: jest.SpyInstance;
-  let whichSpy: jest.SpyInstance;
-  let existsSpy: jest.SpyInstance;
-  let readFileSpy: jest.SpyInstance;
-  let mkdirpSpy: jest.SpyInstance;
-  let mkdirSpy: jest.SpyInstance;
-  let symlinkSpy: jest.SpyInstance;
-  let execSpy: jest.SpyInstance;
-  let getManifestSpy: jest.SpyInstance;
-  let getAllVersionsSpy: jest.SpyInstance;
-  let httpmGetJsonSpy: jest.SpyInstance;
+  let inSpy: jest.Mock<typeof core.getInput>;
+  let getBooleanInputSpy: jest.Mock<typeof core.getBooleanInput>;
+  let exportVarSpy: jest.Mock<typeof core.exportVariable>;
+  let findSpy: jest.Mock;
+  let cnSpy: jest.SpiedFunction<typeof process.stdout.write>;
+  let logSpy: jest.Mock;
+  let getSpy: jest.Mock;
+  let platSpy: jest.Mock;
+  let archSpy: jest.Mock;
+  let joinSpy: jest.Mock<typeof path.join>;
+  let dlSpy: jest.Mock;
+  let extractTarSpy: jest.Mock;
+  let extractZipSpy: jest.Mock;
+  let cacheSpy: jest.Mock;
+  let dbgSpy: jest.Mock;
+  let whichSpy: jest.Mock;
+  let existsSpy: jest.SpiedFunction<typeof fs.existsSync>;
+  let readFileSpy: jest.SpiedFunction<typeof fs.readFileSync>;
+  let mkdirpSpy: jest.Mock;
+  let mkdirSpy: jest.SpiedFunction<typeof fs.mkdir>;
+  let symlinkSpy: jest.SpiedFunction<typeof fs.symlinkSync>;
+  let execSpy: jest.SpiedFunction<typeof cp.execSync>;
+  let execFileSpy: jest.SpiedFunction<typeof cp.execFileSync>;
+  let getManifestSpy: jest.Mock;
+  let httpmGetJsonSpy: jest.Mock;
 
   beforeAll(async () => {
     process.env['GITHUB_ENV'] = ''; // Stub out Environment file functionality so we can verify it writes to standard out (toolkit is backwards compatible)
@@ -58,22 +139,28 @@ describe('setup-go', () => {
 
     // @actions/core
     inputs = {};
-    inSpy = jest.spyOn(core, 'getInput');
+    inSpy = core.getInput as jest.Mock<typeof core.getInput>;
     inSpy.mockImplementation(name => inputs[name]);
-    getBooleanInputSpy = jest.spyOn(core, 'getBooleanInput');
+    getBooleanInputSpy = core.getBooleanInput as jest.Mock<
+      typeof core.getBooleanInput
+    >;
     getBooleanInputSpy.mockImplementation(name => inputs[name]);
-    exportVarSpy = jest.spyOn(core, 'exportVariable');
+    exportVarSpy = core.exportVariable as jest.Mock<typeof core.exportVariable>;
 
     // node
     os = {};
-    platSpy = jest.spyOn(osm, 'platform');
+    platSpy = osm.platform as jest.Mock;
     platSpy.mockImplementation(() => os['platform']);
-    archSpy = jest.spyOn(osm, 'arch');
+    archSpy = osm.arch as jest.Mock;
     archSpy.mockImplementation(() => os['arch']);
     execSpy = jest.spyOn(cp, 'execSync');
+    execFileSpy = jest.spyOn(cp, 'execFileSync');
+    execFileSpy.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
 
     // switch path join behaviour based on set os.platform
-    joinSpy = jest.spyOn(path, 'join');
+    joinSpy = path.join as jest.Mock<typeof path.join>;
     joinSpy.mockImplementation((...paths: string[]): string => {
       if (os['platform'] == 'win32') {
         return win32Join(...paths);
@@ -83,23 +170,22 @@ describe('setup-go', () => {
     });
 
     // @actions/tool-cache
-    findSpy = jest.spyOn(tc, 'find');
-    dlSpy = jest.spyOn(tc, 'downloadTool');
-    extractTarSpy = jest.spyOn(tc, 'extractTar');
-    extractZipSpy = jest.spyOn(tc, 'extractZip');
-    cacheSpy = jest.spyOn(tc, 'cacheDir');
-    getSpy = jest.spyOn(im, 'getVersionsDist');
-    getManifestSpy = jest.spyOn(tc, 'getManifestFromRepo');
-    getAllVersionsSpy = jest.spyOn(im, 'getManifest');
+    findSpy = tc.find as jest.Mock;
+    dlSpy = tc.downloadTool as jest.Mock;
+    extractTarSpy = tc.extractTar as jest.Mock;
+    extractZipSpy = tc.extractZip as jest.Mock;
+    cacheSpy = tc.cacheDir as jest.Mock;
+    getSpy = vf.getVersionsDist as jest.Mock;
+    getManifestSpy = tc.getManifestFromRepo as jest.Mock;
 
     // httm
-    httpmGetJsonSpy = jest.spyOn(httpm.HttpClient.prototype, 'getJson');
+    httpmGetJsonSpy = httpClientGetJson;
 
     // io
-    whichSpy = jest.spyOn(io, 'which');
+    whichSpy = io.which as jest.Mock;
     existsSpy = jest.spyOn(fs, 'existsSync');
     readFileSpy = jest.spyOn(fs, 'readFileSync');
-    mkdirpSpy = jest.spyOn(io, 'mkdirP');
+    mkdirpSpy = io.mkdirP as jest.Mock;
 
     // fs
     mkdirSpy = jest.spyOn(fs, 'mkdir');
@@ -107,30 +193,26 @@ describe('setup-go', () => {
     symlinkSpy.mockImplementation(() => {});
 
     // gets
-    getManifestSpy.mockImplementation(() => <tc.IToolRelease[]>goTestManifest);
+    getManifestSpy.mockImplementation(() => goTestManifest as IToolRelease[]);
 
     // writes
     cnSpy = jest.spyOn(process.stdout, 'write');
-    logSpy = jest.spyOn(core, 'info');
-    dbgSpy = jest.spyOn(core, 'debug');
-    getSpy.mockImplementation(() => <im.IGoVersion[] | null>goJsonData);
-    cnSpy.mockImplementation(line => {
-      // uncomment to debug
-      // process.stderr.write('write:' + line + '\n');
-    });
-    logSpy.mockImplementation(line => {
-      // uncomment to debug
-      //process.stderr.write('log:' + line + '\n');
-    });
-    dbgSpy.mockImplementation(msg => {
-      // uncomment to see debug output
-      // process.stderr.write(msg + '\n');
-    });
+    logSpy = core.info as jest.Mock;
+    dbgSpy = core.debug as jest.Mock;
+    getSpy.mockImplementation(() => goJsonData as IGoVersion[] | null);
+    cnSpy.mockImplementation(() => true);
+    logSpy.mockImplementation(() => {});
+    dbgSpy.mockImplementation(() => {});
   });
 
   afterEach(() => {
-    // clear out env var set during 'run'
+    // clear out env vars set during 'run'
     delete process.env[im.GOTOOLCHAIN_ENV_VAR];
+    delete process.env['GO_DOWNLOAD_BASE_URL'];
+
+    // reset the exit code that core.setFailed sets on the error-path tests so
+    // that a passing run does not leak a non-zero process exit code
+    process.exitCode = 0;
 
     //jest.resetAllMocks();
     jest.clearAllMocks();
@@ -165,8 +247,10 @@ describe('setup-go', () => {
   });
 
   it('should return manifest from raw URL if repo fetch fails', async () => {
-    getManifestSpy.mockRejectedValue(new Error('Fetch failed'));
-    httpmGetJsonSpy.mockResolvedValue({
+    (getManifestSpy as jest.Mock<any>).mockRejectedValue(
+      new Error('Fetch failed')
+    );
+    (httpmGetJsonSpy as jest.Mock<any>).mockResolvedValue({
       result: goTestManifest
     });
     const manifest = await im.getManifest(undefined);
@@ -205,7 +289,7 @@ describe('setup-go', () => {
     os.arch = 'x64';
 
     // spec: 1.13.0 => 1.13
-    const match: im.IGoVersion | undefined = await im.findMatch('1.13.0');
+    const match: IGoVersion | undefined = await im.findMatch('1.13.0');
     expect(match).toBeDefined();
     const version: string = match ? match.version : '';
     expect(version).toBe('go1.13');
@@ -218,7 +302,7 @@ describe('setup-go', () => {
     os.arch = 'x64';
 
     // spec: 1.13 => 1.13.7 (latest)
-    const match: im.IGoVersion | undefined = await im.findMatch('1.13');
+    const match: IGoVersion | undefined = await im.findMatch('1.13');
     expect(match).toBeDefined();
     const version: string = match ? match.version : '';
     expect(version).toBe('go1.13.7');
@@ -231,7 +315,7 @@ describe('setup-go', () => {
     os.arch = 'x64';
 
     // spec: ^1.13.6 => 1.13.7
-    const match: im.IGoVersion | undefined = await im.findMatch('^1.13.6');
+    const match: IGoVersion | undefined = await im.findMatch('^1.13.6');
     expect(match).toBeDefined();
     const version: string = match ? match.version : '';
     expect(version).toBe('go1.13.7');
@@ -244,7 +328,7 @@ describe('setup-go', () => {
     os.arch = 'x32';
 
     // spec: 1 => 1.13.7 (latest)
-    const match: im.IGoVersion | undefined = await im.findMatch('1');
+    const match: IGoVersion | undefined = await im.findMatch('1');
     expect(match).toBeDefined();
     const version: string = match ? match.version : '';
     expect(version).toBe('go1.13.7');
@@ -257,7 +341,7 @@ describe('setup-go', () => {
     os.arch = 'x64';
 
     // spec: 1.14, stable=false => go1.14rc1
-    const match: im.IGoVersion | undefined = await im.findMatch('1.14.0-rc.1');
+    const match: IGoVersion | undefined = await im.findMatch('1.14.0-rc.1');
     expect(match).toBeDefined();
     const version: string = match ? match.version : '';
     expect(version).toBe('go1.14rc1');
@@ -811,10 +895,9 @@ describe('setup-go', () => {
       getManifestSpy.mockImplementation(() => {
         throw new Error('Unable to download manifest');
       });
-      httpmGetJsonSpy.mockRejectedValue(
+      (httpmGetJsonSpy as jest.Mock<any>).mockRejectedValue(
         new Error('Unable to download manifest from raw URL')
       );
-      getAllVersionsSpy.mockImplementationOnce(() => undefined);
 
       dlSpy.mockImplementation(async () => '/some/temp/path');
       const toolPath = path.normalize('/cache/go/1.13.7/x64');
@@ -1104,5 +1187,457 @@ use .
     await main.run();
     expect(vars).toStrictEqual({GOTOOLCHAIN: 'local'});
     expect(process.env).toHaveProperty('GOTOOLCHAIN', 'local');
+  });
+
+  describe('go-download-base-url', () => {
+    it('downloads a version from custom base URL using version listing', async () => {
+      os.platform = 'linux';
+      os.arch = 'x64';
+
+      const versionSpec = '1.13.1';
+      const customBaseUrl = 'https://example.com/golang';
+
+      inputs['go-version'] = versionSpec;
+      inputs['go-download-base-url'] = customBaseUrl;
+
+      findSpy.mockImplementation(() => '');
+      dlSpy.mockImplementation(async () => '/some/temp/path');
+      const toolPath = path.normalize('/cache/go/1.13.1/x64');
+      extractTarSpy.mockImplementation(async () => '/some/other/temp/path');
+      cacheSpy.mockImplementation(async () => toolPath);
+
+      await main.run();
+
+      const expPath = path.join(toolPath, 'bin');
+      expect(logSpy).toHaveBeenCalledWith(
+        `Using custom Go download base URL: ${customBaseUrl}`
+      );
+      expect(logSpy).toHaveBeenCalledWith('Install from custom download URL');
+      // Version listing should use custom base URL, not go.dev
+      expect(getSpy).toHaveBeenCalledWith(
+        `${customBaseUrl}/?mode=json&include=all`
+      );
+      expect(dlSpy).toHaveBeenCalled();
+      expect(extractTarSpy).toHaveBeenCalled();
+      expect(cnSpy).toHaveBeenCalledWith(`::add-path::${expPath}${osm.EOL}`);
+    });
+
+    it('skips version listing for known direct-download URL (aka.ms)', async () => {
+      os.platform = 'linux';
+      os.arch = 'x64';
+
+      const versionSpec = '1.25.0';
+      const customBaseUrl = 'https://aka.ms/golang/release/latest';
+
+      inputs['go-version'] = versionSpec;
+      inputs['go-download-base-url'] = customBaseUrl;
+
+      findSpy.mockImplementation(() => '');
+      dlSpy.mockImplementation(async () => '/some/temp/path');
+      const toolPath = path.normalize('/cache/go/1.25.0/x64');
+      extractTarSpy.mockImplementation(async () => '/some/other/temp/path');
+      cacheSpy.mockImplementation(async () => toolPath);
+
+      await main.run();
+
+      const expPath = path.join(toolPath, 'bin');
+      expect(logSpy).toHaveBeenCalledWith(
+        'Skipping version listing for known direct-download URL. Constructing download URL directly.'
+      );
+      expect(logSpy).toHaveBeenCalledWith(
+        `Constructed direct download URL: ${customBaseUrl}/go1.25.0.linux-amd64.tar.gz`
+      );
+      expect(logSpy).toHaveBeenCalledWith('Install from custom download URL');
+      expect(getSpy).not.toHaveBeenCalled();
+      expect(dlSpy).toHaveBeenCalled();
+      expect(cnSpy).toHaveBeenCalledWith(`::add-path::${expPath}${osm.EOL}`);
+    });
+
+    it('constructs correct direct download URL for windows (aka.ms)', async () => {
+      os.platform = 'win32';
+      os.arch = 'x64';
+
+      const versionSpec = '1.25.0';
+      const customBaseUrl = 'https://aka.ms/golang/release/latest';
+
+      inputs['go-version'] = versionSpec;
+      inputs['go-download-base-url'] = customBaseUrl;
+      process.env['RUNNER_TEMP'] = 'C:\\temp\\';
+
+      findSpy.mockImplementation(() => '');
+      dlSpy.mockImplementation(async () => 'C:\\temp\\some\\path');
+      extractZipSpy.mockImplementation(() => 'C:\\temp\\some\\other\\path');
+      const toolPath = path.normalize('C:\\cache\\go\\1.25.0\\x64');
+      cacheSpy.mockImplementation(async () => toolPath);
+
+      await main.run();
+
+      expect(getSpy).not.toHaveBeenCalled();
+      expect(dlSpy).toHaveBeenCalledWith(
+        `${customBaseUrl}/go1.25.0.windows-amd64.zip`,
+        'C:\\temp\\go1.25.0.windows-amd64.zip',
+        undefined
+      );
+    });
+
+    it('skips manifest and downloads directly from custom URL', async () => {
+      os.platform = 'linux';
+      os.arch = 'x64';
+
+      const versionSpec = '1.12.16';
+      const customBaseUrl = 'https://example.com/golang';
+
+      inputs['go-version'] = versionSpec;
+      inputs['go-download-base-url'] = customBaseUrl;
+      inputs['token'] = 'faketoken';
+
+      findSpy.mockImplementation(() => '');
+      dlSpy.mockImplementation(async () => '/some/temp/path');
+      const toolPath = path.normalize('/cache/go/1.12.16/x64');
+      extractTarSpy.mockImplementation(async () => '/some/other/temp/path');
+      cacheSpy.mockImplementation(async () => toolPath);
+
+      await main.run();
+
+      // Should not try to use the manifest at all
+      expect(logSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('Not found in manifest')
+      );
+      expect(logSpy).toHaveBeenCalledWith('Install from custom download URL');
+    });
+
+    it('strips trailing slashes from custom base URL', async () => {
+      os.platform = 'linux';
+      os.arch = 'x64';
+
+      const versionSpec = '1.13.1';
+      const customBaseUrl = 'https://example.com/golang/';
+
+      inputs['go-version'] = versionSpec;
+      inputs['go-download-base-url'] = customBaseUrl;
+
+      findSpy.mockImplementation(() => '');
+      dlSpy.mockImplementation(async () => '/some/temp/path');
+      const toolPath = path.normalize('/cache/go/1.13.1/x64');
+      extractTarSpy.mockImplementation(async () => '/some/other/temp/path');
+      cacheSpy.mockImplementation(async () => toolPath);
+
+      await main.run();
+
+      expect(logSpy).toHaveBeenCalledWith(
+        `Acquiring go1.13.1 from https://example.com/golang/go1.13.1.linux-amd64.tar.gz`
+      );
+    });
+
+    it('reads custom base URL from environment variable', async () => {
+      os.platform = 'linux';
+      os.arch = 'x64';
+
+      const versionSpec = '1.13.1';
+      const customBaseUrl = 'https://example.com/golang';
+
+      inputs['go-version'] = versionSpec;
+      process.env['GO_DOWNLOAD_BASE_URL'] = customBaseUrl;
+
+      findSpy.mockImplementation(() => '');
+      dlSpy.mockImplementation(async () => '/some/temp/path');
+      const toolPath = path.normalize('/cache/go/1.13.1/x64');
+      extractTarSpy.mockImplementation(async () => '/some/other/temp/path');
+      cacheSpy.mockImplementation(async () => toolPath);
+
+      await main.run();
+
+      expect(logSpy).toHaveBeenCalledWith(
+        `Using custom Go download base URL: ${customBaseUrl}`
+      );
+      expect(logSpy).toHaveBeenCalledWith('Install from custom download URL');
+    });
+
+    it('input takes precedence over environment variable', async () => {
+      os.platform = 'linux';
+      os.arch = 'x64';
+
+      const versionSpec = '1.13.1';
+      const inputUrl = 'https://input.example.com/golang';
+      const envUrl = 'https://env.example.com/golang';
+
+      inputs['go-version'] = versionSpec;
+      inputs['go-download-base-url'] = inputUrl;
+      process.env['GO_DOWNLOAD_BASE_URL'] = envUrl;
+
+      findSpy.mockImplementation(() => '');
+      dlSpy.mockImplementation(async () => '/some/temp/path');
+      const toolPath = path.normalize('/cache/go/1.13.1/x64');
+      extractTarSpy.mockImplementation(async () => '/some/other/temp/path');
+      cacheSpy.mockImplementation(async () => toolPath);
+
+      await main.run();
+
+      expect(logSpy).toHaveBeenCalledWith(
+        `Using custom Go download base URL: ${inputUrl}`
+      );
+      expect(logSpy).toHaveBeenCalledWith(
+        `Acquiring go1.13.1 from ${inputUrl}/go1.13.1.linux-amd64.tar.gz`
+      );
+    });
+
+    it('errors when stable alias is used with custom URL', async () => {
+      os.platform = 'linux';
+      os.arch = 'x64';
+
+      inputs['go-version'] = 'stable';
+      inputs['go-download-base-url'] = 'https://example.com/golang';
+
+      findSpy.mockImplementation(() => '');
+      await main.run();
+
+      expect(cnSpy).toHaveBeenCalledWith(
+        `::error::Version aliases 'stable' are not supported with a custom download base URL. Please specify an exact Go version.${osm.EOL}`
+      );
+    });
+
+    it('logs info when check-latest is used with custom URL', async () => {
+      os.platform = 'linux';
+      os.arch = 'x64';
+
+      const versionSpec = '1.13.1';
+      const customBaseUrl = 'https://example.com/golang';
+
+      inputs['go-version'] = versionSpec;
+      inputs['go-download-base-url'] = customBaseUrl;
+      inputs['check-latest'] = true;
+
+      findSpy.mockImplementation(() => '');
+      dlSpy.mockImplementation(async () => '/some/temp/path');
+      const toolPath = path.normalize('/cache/go/1.13.1/x64');
+      extractTarSpy.mockImplementation(async () => '/some/other/temp/path');
+      cacheSpy.mockImplementation(async () => toolPath);
+
+      await main.run();
+
+      expect(logSpy).toHaveBeenCalledWith(
+        'check-latest is not supported with a custom download base URL. Using the provided version spec directly.'
+      );
+    });
+
+    it('constructs direct download info correctly', () => {
+      os.platform = 'linux';
+      os.arch = 'x64';
+
+      const info = im.getInfoFromDirectDownload(
+        '1.25.0',
+        'x64',
+        'https://aka.ms/golang/release/latest'
+      );
+
+      expect(info.type).toBe('dist');
+      expect(info.downloadUrl).toBe(
+        'https://aka.ms/golang/release/latest/go1.25.0.linux-amd64.tar.gz'
+      );
+      expect(info.fileName).toBe('go1.25.0.linux-amd64.tar.gz');
+      expect(info.resolvedVersion).toBe('1.25.0');
+    });
+
+    it('constructs direct download info for windows', () => {
+      os.platform = 'win32';
+      os.arch = 'x64';
+
+      const info = im.getInfoFromDirectDownload(
+        '1.25.0',
+        'x64',
+        'https://aka.ms/golang/release/latest'
+      );
+
+      expect(info.type).toBe('dist');
+      expect(info.downloadUrl).toBe(
+        'https://aka.ms/golang/release/latest/go1.25.0.windows-amd64.zip'
+      );
+      expect(info.fileName).toBe('go1.25.0.windows-amd64.zip');
+    });
+
+    it('constructs direct download info for arm64', () => {
+      os.platform = 'darwin';
+      os.arch = 'arm64';
+
+      const info = im.getInfoFromDirectDownload(
+        '1.25.0',
+        'arm64',
+        'https://aka.ms/golang/release/latest'
+      );
+
+      expect(info.type).toBe('dist');
+      expect(info.downloadUrl).toBe(
+        'https://aka.ms/golang/release/latest/go1.25.0.darwin-arm64.tar.gz'
+      );
+      expect(info.fileName).toBe('go1.25.0.darwin-arm64.tar.gz');
+    });
+
+    it('caches under actual installed version when it differs from input spec', async () => {
+      os.platform = 'linux';
+      os.arch = 'x64';
+
+      const versionSpec = '1.20';
+      const customBaseUrl = 'https://aka.ms/golang/release/latest';
+
+      inputs['go-version'] = versionSpec;
+      inputs['go-download-base-url'] = customBaseUrl;
+
+      findSpy.mockImplementation(() => '');
+      dlSpy.mockImplementation(async () => '/some/temp/path');
+      extractTarSpy.mockImplementation(async () => '/some/other/temp/path');
+
+      // Mock the installed Go binary reporting a different patch version
+      execFileSpy.mockImplementation(() => 'go version go1.20.14 linux/amd64');
+
+      const expectedToolName = im.customToolCacheName(customBaseUrl);
+      const toolPath = path.normalize(`/cache/${expectedToolName}/1.20.14/x64`);
+      cacheSpy.mockImplementation(async () => toolPath);
+
+      await main.run();
+
+      expect(logSpy).toHaveBeenCalledWith(
+        "Requested version '1.20' resolved to installed version '1.20.14'"
+      );
+      // Cache key should use actual version, not the input spec
+      expect(cacheSpy).toHaveBeenCalledWith(
+        expect.any(String),
+        expectedToolName,
+        '1.20.14',
+        'x64'
+      );
+    });
+
+    it('shows clear error with platform/arch and URL on 404', async () => {
+      os.platform = 'linux';
+      os.arch = 'arm64';
+
+      const versionSpec = '1.25.0';
+      const customBaseUrl = 'https://example.com/golang';
+
+      inputs['go-version'] = versionSpec;
+      inputs['go-download-base-url'] = customBaseUrl;
+
+      getSpy.mockImplementationOnce(() => {
+        throw new Error('Not a JSON endpoint');
+      });
+
+      findSpy.mockImplementation(() => '');
+      const httpError = new tc.HTTPError(404);
+      dlSpy.mockImplementation(() => {
+        throw httpError;
+      });
+
+      await main.run();
+
+      expect(cnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'The requested Go version 1.25.0 is not available for platform linux/arm64'
+        )
+      );
+      expect(cnSpy).toHaveBeenCalledWith(expect.stringContaining('HTTP 404'));
+    });
+
+    it('shows clear error with platform/arch and URL on download failure', async () => {
+      os.platform = 'linux';
+      os.arch = 'x64';
+
+      const versionSpec = '1.25.0';
+      const customBaseUrl = 'https://example.com/golang';
+
+      inputs['go-version'] = versionSpec;
+      inputs['go-download-base-url'] = customBaseUrl;
+
+      getSpy.mockImplementationOnce(() => {
+        throw new Error('Not a JSON endpoint');
+      });
+
+      findSpy.mockImplementation(() => '');
+      dlSpy.mockImplementation(() => {
+        throw new Error('connection refused');
+      });
+
+      await main.run();
+
+      expect(cnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Failed to download Go 1.25.0 for platform linux/x64'
+        )
+      );
+      expect(cnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(customBaseUrl)
+      );
+    });
+
+    it.each(['^1.25.0', '~1.25', '>=1.25.0', '<1.26.0', '1.25.x', '1.x'])(
+      'errors on version range "%s" when version listing is unavailable',
+      async versionSpec => {
+        os.platform = 'linux';
+        os.arch = 'x64';
+
+        inputs['go-version'] = versionSpec;
+        inputs['go-download-base-url'] = 'https://example.com/golang';
+
+        // Simulate version listing not available
+        getSpy.mockImplementationOnce(() => {
+          throw new Error('Not a JSON endpoint');
+        });
+
+        findSpy.mockImplementation(() => '');
+
+        await main.run();
+
+        expect(cnSpy).toHaveBeenCalledWith(
+          expect.stringContaining(
+            `Version range '${versionSpec}' is not supported with a custom download base URL`
+          )
+        );
+      }
+    );
+
+    it('rejects version range in getInfoFromDirectDownload', () => {
+      os.platform = 'linux';
+      os.arch = 'x64';
+
+      expect(() =>
+        im.getInfoFromDirectDownload(
+          '^1.25.0',
+          'x64',
+          'https://example.com/golang'
+        )
+      ).toThrow(
+        "Version range '^1.25.0' is not supported with a custom download base URL"
+      );
+    });
+
+    it('passes token as auth header for custom URL downloads', async () => {
+      os.platform = 'linux';
+      os.arch = 'x64';
+
+      const versionSpec = '1.25.0';
+      const customBaseUrl = 'https://private-mirror.example.com/golang';
+
+      inputs['go-version'] = versionSpec;
+      inputs['go-download-base-url'] = customBaseUrl;
+      inputs['token'] = 'ghp_testtoken123';
+
+      getSpy.mockImplementationOnce(() => {
+        throw new Error('Not a JSON endpoint');
+      });
+
+      findSpy.mockImplementation(() => '');
+      dlSpy.mockImplementation(async () => '/some/temp/path');
+      extractTarSpy.mockImplementation(async () => '/some/other/temp/path');
+      const expectedToolName = im.customToolCacheName(customBaseUrl);
+      const toolPath = path.normalize(`/cache/${expectedToolName}/1.25.0/x64`);
+      cacheSpy.mockImplementation(async () => toolPath);
+
+      await main.run();
+
+      expect(dlSpy).toHaveBeenCalledWith(
+        `${customBaseUrl}/go1.25.0.linux-amd64.tar.gz`,
+        undefined,
+        'token ghp_testtoken123'
+      );
+    });
   });
 });

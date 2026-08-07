@@ -1,6 +1,6 @@
 ---
 name: bignumber.js
-version: 9.1.2
+version: 9.3.1
 type: npm
 summary: A library for arbitrary-precision decimal and non-decimal arithmetic
 homepage:
@@ -11,7 +11,7 @@ licenses:
     The MIT License (MIT)
     =====================
 
-    Copyright © `<2023>` `Michael Mclaughlin`
+    Copyright © `<2025>` `Michael Mclaughlin`
 
     Permission is hereby granted, free of charge, to any person
     obtaining a copy of this software and associated documentation
@@ -38,5 +38,5 @@ licenses:
   text: |-
     The MIT Licence.
 
-    See [LICENCE](https://github.com/MikeMcl/bignumber.js/blob/master/LICENCE).
+    See [LICENCE](https://github.com/MikeMcl/bignumber.js/blob/main/LICENCE.md).
 notices: []

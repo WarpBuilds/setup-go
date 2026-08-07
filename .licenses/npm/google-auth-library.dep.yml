@@ -1,6 +1,6 @@
 ---
 name: google-auth-library
-version: 9.10.0
+version: 9.15.1
 type: npm
 summary: Google APIs Authentication Client Library for Node.js
 homepage:
@@ -222,5 +222,5 @@ licenses:
     [projects]: https://console.cloud.google.com/project
     [billing]: https://support.google.com/cloud/answer/6293499#enable-billing
 
-    [auth]: https://cloud.google.com/docs/authentication/getting-started
+    [auth]: https://cloud.google.com/docs/authentication/external/set-up-adc-local
 notices: []
